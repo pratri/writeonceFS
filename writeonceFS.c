@@ -28,11 +28,15 @@ char* wo_main_file;
 
 typedef struct superblock{
     struct inode* free_start;
-    struct inode* occupied_start;
-    int num_free_inodes;
-    int num_occupied_inodes;
-    int sizeofsystem;
-    struct wo_file* head;
+    // struct inode* occupied_start;
+    // int num_free_inodes;
+    // int num_occupied_inodes;
+    int sizeofsystem_remaining;
+    struct wo_file* all_files_head;
+    struct wo_file* open_files_head;
+    struct inode* inode_location;
+    struct wo_file* wo_file_location;
+    char* disk_block_location;
 
 }superblock;
 
@@ -50,7 +54,7 @@ typedef struct inode{
     // Keeps track of how many of the 1K bytes were used in this block
     int bytes_used;
     //What disk block is pointed to in disk/mem
-    char* memorypointed;
+    char* diskpointed;
     //What the next disk block is in the file
     struct inode* next; 
     
@@ -88,18 +92,34 @@ int wo_mount(char* filename, void* memoryaddress){
             blank = 1;
         }
     }
-
+    int sizeof_filepartition = 50000;
+    int sizeof_inode_partition = 1000000;
+    int sizeof_disknode = 1000;
     //If blank then setup inodes and such
-    if (blank){
+    if (!blank){
         //Sets up superblock at start of memory, it contains a list of free and occupied inodes as well as number and size of file system
         superblock* ptr = (superblock*)mem;
         ptr->free_start = NULL;
-        ptr->occupied_start = NULL;
-        ptr->head = NULL;
-        ptr->num_free_inodes = 0;
-        ptr->num_occupied_inodes = 0;
-        ptr->sizeofsystem = sizeof(superblock);
-        printf("Setup superbloc: %d, address: %p\n", ptr->sizeofsystem, &(ptr->sizeofsystem));
+        // ptr->occupied_start = NULL;
+        ptr->all_files_head = NULL;
+        ptr->open_files_head = NULL;
+        // ptr->num_free_inodes = 0;
+        // ptr->num_occupied_inodes = 0;
+        ptr->inode_location = (inode*)(mem+sizeof(superblock));
+        ptr->wo_file_location = (wo_file*)(mem + sizeof_inode_partition);
+        ptr->disk_block_location = (char*)(mem + sizeof_inode_partition + sizeof_filepartition);
+        ptr->sizeofsystem_remaining = 4000000 - sizeof_inode_partition - sizeof_filepartition;
+        // printf("Setup superbloc: %d, address: %p, %p, %p, %p\n", ptr->sizeofsystem_remaining, ptr, ptr->inode_location,ptr->wo_file_location , ptr->disk_block_location);
+        // Set up first inode and increment both those locations, have inode pointing to old diskblock 1K, 72-1000000 is inodees, 1000000-1005000 is files, 1005000-4000000 is disk blocks
+        ptr->inode_location->bytes_used = 0;
+        ptr->inode_location->diskpointed = ptr->disk_block_location;
+        ptr->inode_location->next = (inode*)((char*)ptr->inode_location + sizeof(inode));
+        ptr->free_start = ptr->inode_location;
+        // printf("INODE %p, size: %lu, %p\n", ptr->inode_location, sizeof(inode), ptr->disk_block_location);
+        ptr->inode_location = ptr->inode_location->next;
+        ptr->disk_block_location = ptr->disk_block_location + sizeof_disknode;
+        ptr->sizeofsystem_remaining -= sizeof_disknode;
+        // printf("Checking if new are correct? %p, %p\n", ptr->inode_location, ptr->disk_block_location);
         
     } 
 
@@ -107,7 +127,6 @@ int wo_mount(char* filename, void* memoryaddress){
             // intital structures necessary for accessing 'disk' . If disk format is broken, report error and free structures built 
             // In case of dump of unmount assume data is recognizable form and if mount is called on that validate and parse file to load all contents
     
-    // The wo_mount() function only takes one disk in as a parameter. However, it is possible that we will use the output disk file from one test
     // and load it in as input for the next test. Your library should know if the file is already initialized and take proper action to either init or to parse.
 
     return 0;
@@ -129,9 +148,7 @@ int wo_unmount(void* memoryaddress){
     // Also writes out files to file? how does multiple files write into one???? maybe write them all in one at a time with gap in between somehow??
     superblock* ptr = (superblock*)memoryaddress;
     fwrite("Start of superblock\n",sizeof(char), 20, file);
-    printf("size %d\n", ptr->sizeofsystem);
-    int size = ptr->sizeofsystem;
-    fprintf(file, "%d", size);
+    fprintf(file, "%d", ptr->sizeofsystem_remaining);
 
     return 0;
 }
@@ -164,7 +181,23 @@ int wo_read(int fd, void* buffer, int bytes){
 }
 
 int wo_write(int fd, void* buffer, int bytes){
-    // Should extend file size if available????
+    // Start writing character by chacter??????
+    // If file needs disk block then check if file size available is > bytes rounded up then there is space then create inode pointing to disk block, put inode in file matching name
+    //Creating 1k new inodes: 
+    superblock* ptr = (superblock*)mem;
+    for(int i=0; i<10; i++){
+        ptr->inode_location->next = (inode*)((char*)ptr->inode_location + sizeof(inode));
+        ptr->inode_location->bytes_used = i;
+        printf("INODE: %p, %d\n", ptr->inode_location, ptr->inode_location->bytes_used);
+        ptr->inode_location = ptr->inode_location->next;
+    }
+    //Printing these indoes??
+    inode* temp = ptr->free_start;
+    while(temp->next !=NULL){
+        printf("INODE: %p, %d\n", temp, temp->bytes_used);
+        temp = temp->next;
+    }
+
     return 0;
 
 }
