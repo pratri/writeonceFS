@@ -33,21 +33,31 @@ typedef struct superblock{
     // int num_occupied_inodes;
     int sizeofsystem_remaining;
     struct wo_file* all_files_head;
-    struct wo_file* open_files_head;
     struct inode* inode_location;
     struct wo_file* wo_file_location;
     char* disk_block_location;
+    int file_descriptor_counter;
 
 }superblock;
 
 typedef struct wo_file{
     // name of file
     char* name;
+    //FIle descriptor
+    int fd;
     // Where the starting inode is
     struct inode* start;
     //Keep linked list of files?
     struct wo_file* next_file;
+    //Can read
+    int read;
+    //Can write 
+    int write;
+    //If open
+    int open;
 }wo_file;
+
+
 
 typedef struct inode{
     // Should have one for every 1K disk block and say whether or not it is in use or starting a file
@@ -102,7 +112,6 @@ int wo_mount(char* filename, void* memoryaddress){
         ptr->free_start = NULL;
         // ptr->occupied_start = NULL;
         ptr->all_files_head = NULL;
-        ptr->open_files_head = NULL;
         // ptr->num_free_inodes = 0;
         // ptr->num_occupied_inodes = 0;
         ptr->inode_location = (inode*)(mem+sizeof(superblock));
@@ -156,19 +165,115 @@ int wo_unmount(void* memoryaddress){
 // int wo_open( char* <filename>, <flags>, <mode> )???, when opening user specifies flag in which file is opened, file permission should be granted?
 int wo_open(char* filename, char* flags){  
     // On open, if not in file creation mode, attempt to find file
-   
+    superblock* ptr = (superblock*)mem;
+    wo_file* current_file;
+    wo_file* temp = ptr->all_files_head;
+    int fileExists = 0;
+    while(temp->next_file!=NULL){
+        if((temp->name) == filename){
+            current_file = temp;
+            fileExists = 1;
+        }
+        temp = temp->next_file;
+    }
     // If it does not exist, return the appropriate error code and set errno
-    // If it does exist, check permissions . If they are not compatible with the request, return the appropriate error code and set errno.
-    
+    int errnum;
+    if(fileExists == 0){
+        printf("file does not exist\n");
+        errnum = errno;
+        fprintf(stderr, "Value of errno: %d\n", errno);
+        fprintf(stderr, "File doesn't exist: %s\n", strerror(errnum));
+        return -1;
+    }
+    //Since file exists put it in open_files list
+    current_file->open = 1;
 
-    // If in file create mode, check to make sure file does not exist, if it does, return the appropriate error code and set errno
-    // If it does not exist, create an entry for it and create and return a file descriptor for it. By default created files have all permissions(777)
+    current_file->next_file = NULL;
+    if(strcmp(flags, "WO_RDONLY") == 0){
+        current_file->read = 1;
+    }else if(strcmp(flags, "WO_WRONLY") == 0){
+        current_file->write = 1;
+    }else if(strcmp(flags, "WO_RDWR") == 0){
+        current_file->read = 1;
+        current_file->write = 1;
+    }else{
+        printf("Flag is in incorrect format\n");
+        errnum = errno;
+        fprintf(stderr, "Value of errno: %d\n", errno);
+        fprintf(stderr, "Flag is in incorrect format: %s\n", strerror(errnum));
+        return -1;
+    }
+
     return 0;
 }
 
-int wo_create(char* filename){
-    // If file doesn't exist check if enough size
-    return 0;
+int wo_create(char* filename, char* flags){
+    
+    // If it does not exist, create an entry for it and create and return a file descriptor for it. By default created files have all permissions(777)
+    int errnum;
+    
+    superblock* ptr = (superblock*)mem;
+    // If in file create mode, check to make sure file does not exist, if it does, return the appropriate error code and set errno
+    int doesExist = 0;
+    // CHECK IF allfiles head is null
+    if(ptr->all_files_head == NULL){
+        printf("FirstFile!\n");
+    }else{
+        wo_file* temp = ptr->all_files_head;
+        while(temp->next_file!=NULL){
+            if(temp->name == filename){
+                doesExist = 1;
+            }
+            temp = temp->next_file;
+        }
+    }
+    
+   
+    if(doesExist){
+        printf("Can't create file it already exists\n");
+        errnum = errno;
+        fprintf(stderr, "Value of errno: %d\n", errno);
+        fprintf(stderr, "Can't create file it already exists %s\n", strerror(errnum));
+        return -1;
+    }
+
+    wo_file* creatingFile = ptr->wo_file_location;
+    creatingFile->name = filename;
+    creatingFile->next_file = NULL;
+    ptr->wo_file_location = (wo_file*)((char*)ptr->wo_file_location + sizeof(wo_file));
+    creatingFile->read = 0;
+    creatingFile->write = 0;
+    creatingFile->start = 0;
+    // If it does exist, check permissions . If they are not compatible with the request, return the appropriate error code and set errno.
+    // Permissions of form WO_RDONL
+    if(strcmp(flags, "WO_RDONLY") == 0){ 
+        creatingFile->read = 1;
+    }else if(strcmp(flags, "WO_WRONLY") == 0){
+        creatingFile->write = 1;
+    }else if(strcmp(flags, "WO_RDWR") == 0){
+        creatingFile->read = 1;
+        creatingFile->write = 1;
+    }else{
+        printf("Flag is in incorrect format\n");
+        errnum = errno;
+        fprintf(stderr, "Value of errno: %d\n", errno);
+        fprintf(stderr, "Flag is in incorrect format: %s\n", strerror(errnum));
+        return -1;
+    }
+    creatingFile->fd = ptr->file_descriptor_counter;
+    ptr->file_descriptor_counter += 1;
+    //ADD FILE TO LIST
+    if(ptr->all_files_head == NULL){
+        ptr->all_files_head = creatingFile;
+    }else{
+        wo_file* temp = ptr->all_files_head;
+        while(temp->next_file!=NULL){
+            temp = temp->next_file;
+        }
+        temp->next_file = creatingFile;
+    }
+
+    return creatingFile->fd;
 }
 
 int wo_read(int fd, void* buffer, int bytes){
@@ -183,8 +288,32 @@ int wo_read(int fd, void* buffer, int bytes){
 int wo_write(int fd, void* buffer, int bytes){
     // Start writing character by chacter??????
     // If file needs disk block then check if file size available is > bytes rounded up then there is space then create inode pointing to disk block, put inode in file matching name
-    //Creating 1k new inodes: 
     superblock* ptr = (superblock*)mem;
+    int errnum;
+    // Check if fd is valid
+    int check_if_exists = 0;
+    wo_file* current_file;
+    wo_file* file_temp = ptr->all_files_head;
+    while(file_temp->next_file!=NULL){
+        if(file_temp->fd == fd){    
+            check_if_exists = 1;
+            current_file = file_temp;
+        }
+        file_temp = file_temp->next_file;
+    }
+    if(!check_if_exists){
+        printf("File descriptor does not exist\n");
+        errnum = errno;
+        fprintf(stderr, "Value of errno: %d\n", errno);
+        fprintf(stderr, "File descriptor does not exist %s\n", strerror(errnum));
+        return -1;
+    }
+    //Check if disk nodes are necessary??
+    if(ptr->sizeofsystem_remaining < bytes+1000){
+        printf("NOT ENOGUHT SPACE can't write");
+    }
+
+    //Creating 1k new inodes: 
     for(int i=0; i<10; i++){
         ptr->inode_location->next = (inode*)((char*)ptr->inode_location + sizeof(inode));
         ptr->inode_location->bytes_used = i;
@@ -192,10 +321,10 @@ int wo_write(int fd, void* buffer, int bytes){
         ptr->inode_location = ptr->inode_location->next;
     }
     //Printing these indoes??
-    inode* temp = ptr->free_start;
-    while(temp->next !=NULL){
-        printf("INODE: %p, %d\n", temp, temp->bytes_used);
-        temp = temp->next;
+    inode* inode_temp = ptr->free_start;
+    while(inode_temp->next !=NULL){
+        printf("INODE: %p, %d\n", inode_temp, inode_temp->bytes_used);
+        inode_temp = inode_temp->next;
     }
 
     return 0;
@@ -203,10 +332,40 @@ int wo_write(int fd, void* buffer, int bytes){
 }
 
 int wo_close(int fd){
+    superblock* ptr = (superblock*)mem;
+    int errnum;
+    //Check if file is open in curent 
+    int check_if_open = 0;
+    wo_file* current_file;
+    wo_file* temp = ptr->all_files_head;
+    while(temp->next_file!=NULL){
+        if(temp->fd == fd && temp->open == 1){    
+            check_if_open = 1;
+            current_file = temp;
+        }
+        temp = temp->next_file;
+    }
+    if(check_if_open == 1){
+        current_file->open = 0;
+    }else{
+        printf("File is not open can't close\n");
+        errnum = errno;
+        fprintf(stderr, "Value of errno: %d\n", errno);
+        fprintf(stderr, "File is not open can't close %s\n", strerror(errnum));
+        return -1;
+    }
     return 0;
 }
 
+void printfiles(){
+    superblock* ptr = (superblock*)mem;
+    wo_file* current_file = ptr->all_files_head;
 
+    while(current_file!=NULL){
+        printf("FD: %d, name: %s, add: %p, size %lu\n", current_file->fd, current_file->name, current_file, sizeof(wo_file));
+        current_file = current_file->next_file;
+    }
+}
 
 int main(int argc, char* argv[]){
     // Malloc 4 MB and create file pass that in to mount
@@ -214,6 +373,10 @@ int main(int argc, char* argv[]){
     printf("LOL ARLEAY?\n");
     wo_mount("test.txt", memoryaddress);
 
+    wo_create("hi1", "WO_RDWR");
+    wo_create("wow", "WO_RDWR");
+    wo_create("amazing", "WO_RDWR");
+    printfiles();
     wo_unmount(mem);
 
     free(memoryaddress);
