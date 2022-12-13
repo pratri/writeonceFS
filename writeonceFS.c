@@ -14,7 +14,10 @@
 // only write to hard-drive once when file is unmounted.
 // Write out 4MB image of modified 'disk' to same file it came from, overwriting old information and preserving any changes made
 
-int freeDiskBlocks = 0;
+
+int sizeof_filepartition = 50000;
+int sizeof_inode_partition = 1000000;
+int sizeof_disknode = 1000;
 
 //Array of open file descriptors:
 int* openfiledescriptors;
@@ -27,7 +30,7 @@ int init = 0;
 char* wo_main_file;
 
 typedef struct superblock{
-    struct inode* free_start;
+    // struct inode* free_start;
     // struct inode* occupied_start;
     // int num_free_inodes;
     // int num_occupied_inodes;
@@ -102,32 +105,24 @@ int wo_mount(char* filename, void* memoryaddress){
             blank = 1;
         }
     }
-    int sizeof_filepartition = 50000;
-    int sizeof_inode_partition = 1000000;
-    int sizeof_disknode = 1000;
+
     //If blank then setup inodes and such
     if (!blank){
         //Sets up superblock at start of memory, it contains a list of free and occupied inodes as well as number and size of file system
         superblock* ptr = (superblock*)mem;
-        ptr->free_start = NULL;
+        // ptr->free_start = NULL;
         // ptr->occupied_start = NULL;
         ptr->all_files_head = NULL;
         // ptr->num_free_inodes = 0;
         // ptr->num_occupied_inodes = 0;
         ptr->inode_location = (inode*)(mem+sizeof(superblock));
+        ptr->inode_location->next = NULL;
         ptr->wo_file_location = (wo_file*)(mem + sizeof_inode_partition);
         ptr->disk_block_location = (char*)(mem + sizeof_inode_partition + sizeof_filepartition);
         ptr->sizeofsystem_remaining = 4000000 - sizeof_inode_partition - sizeof_filepartition;
         // printf("Setup superbloc: %d, address: %p, %p, %p, %p\n", ptr->sizeofsystem_remaining, ptr, ptr->inode_location,ptr->wo_file_location , ptr->disk_block_location);
         // Set up first inode and increment both those locations, have inode pointing to old diskblock 1K, 72-1000000 is inodees, 1000000-1005000 is files, 1005000-4000000 is disk blocks
-        ptr->inode_location->bytes_used = 0;
-        ptr->inode_location->diskpointed = ptr->disk_block_location;
-        ptr->inode_location->next = (inode*)((char*)ptr->inode_location + sizeof(inode));
-        ptr->free_start = ptr->inode_location;
-        // printf("INODE %p, size: %lu, %p\n", ptr->inode_location, sizeof(inode), ptr->disk_block_location);
-        ptr->inode_location = ptr->inode_location->next;
-        ptr->disk_block_location = ptr->disk_block_location + sizeof_disknode;
-        ptr->sizeofsystem_remaining -= sizeof_disknode;
+        
         // printf("Checking if new are correct? %p, %p\n", ptr->inode_location, ptr->disk_block_location);
         
     } 
@@ -241,9 +236,10 @@ int wo_create(char* filename, char* flags){
     creatingFile->name = filename;
     creatingFile->next_file = NULL;
     ptr->wo_file_location = (wo_file*)((char*)ptr->wo_file_location + sizeof(wo_file));
+    creatingFile->open = 1;
     creatingFile->read = 0;
     creatingFile->write = 0;
-    creatingFile->start = 0;
+    creatingFile->start = NULL;
     // If it does exist, check permissions . If they are not compatible with the request, return the appropriate error code and set errno.
     // Permissions of form WO_RDONL
     if(strcmp(flags, "WO_RDONLY") == 0){ 
@@ -277,8 +273,19 @@ int wo_create(char* filename, char* flags){
 }
 
 int wo_read(int fd, void* buffer, int bytes){
-    // fd valid file descriptor for filesystem 
-    // buffer: a memory location to either write bytes to or read from 
+    superblock* ptr = (superblock*)mem;
+    int errnum;
+    // Check if fd is valid
+    int check_if_exists = 0;
+    wo_file* current_file;
+    wo_file* file_temp = ptr->all_files_head;
+    while(file_temp->next_file!=NULL){
+        if(file_temp->fd == fd && file_temp->open == 1 && file_temp->write == 1){    
+            check_if_exists = 1;
+            current_file = file_temp;
+        }
+        file_temp = file_temp->next_file;
+    }
 
     // On invocation check if given filedescriptor is valid (has entry in current table of open file descriptors), if not return with error and set errno
     //      If valid mark it as closed (remove from current table of open file descriptors)
@@ -286,7 +293,7 @@ int wo_read(int fd, void* buffer, int bytes){
 }
 
 int wo_write(int fd, void* buffer, int bytes){
-    // Start writing character by chacter??????
+    // Start writing character using memcpy
     // If file needs disk block then check if file size available is > bytes rounded up then there is space then create inode pointing to disk block, put inode in file matching name
     superblock* ptr = (superblock*)mem;
     int errnum;
@@ -295,36 +302,77 @@ int wo_write(int fd, void* buffer, int bytes){
     wo_file* current_file;
     wo_file* file_temp = ptr->all_files_head;
     while(file_temp->next_file!=NULL){
-        if(file_temp->fd == fd){    
+        if(file_temp->fd == fd && file_temp->open == 1 && file_temp->write == 1){    
             check_if_exists = 1;
             current_file = file_temp;
         }
         file_temp = file_temp->next_file;
     }
     if(!check_if_exists){
-        printf("File descriptor does not exist\n");
+        printf("File descriptor does not exist or not in write mode\n");
         errnum = errno;
         fprintf(stderr, "Value of errno: %d\n", errno);
-        fprintf(stderr, "File descriptor does not exist %s\n", strerror(errnum));
+        fprintf(stderr, "File descriptor does not exist or not in write mode%s\n", strerror(errnum));
         return -1;
     }
     //Check if disk nodes are necessary??
     if(ptr->sizeofsystem_remaining < bytes+1000){
-        printf("NOT ENOGUHT SPACE can't write");
+        printf("NOT ENOUGH SPACE can't write");
     }
+    inode* current_inode;
+    if(current_file->start == NULL){
+        printf("CREATED INODE: \n");
+        // No inodes, first time writing, so create inode and disk it points to
+        current_inode = ptr->inode_location;
+        current_file->start = current_inode;
+        current_inode->bytes_used = 0;
+        current_inode->diskpointed = ptr->disk_block_location;
+        current_inode->next = NULL;
+        ptr->inode_location = (inode*)((char*)ptr->inode_location + sizeof(inode));
 
-    //Creating 1k new inodes: 
-    for(int i=0; i<10; i++){
-        ptr->inode_location->next = (inode*)((char*)ptr->inode_location + sizeof(inode));
-        ptr->inode_location->bytes_used = i;
-        printf("INODE: %p, %d\n", ptr->inode_location, ptr->inode_location->bytes_used);
-        ptr->inode_location = ptr->inode_location->next;
+        ptr->disk_block_location = ptr->disk_block_location + sizeof_disknode;
+        ptr->sizeofsystem_remaining -= sizeof_disknode;
+        
+    }else{
+        //Finds last inode in list
+        inode* temp_inode = current_file->start;
+        while(temp_inode->next!=NULL){
+            temp_inode = temp_inode->next;
+        }
+        current_inode = temp_inode;
     }
-    //Printing these indoes??
-    inode* inode_temp = ptr->free_start;
-    while(inode_temp->next !=NULL){
-        printf("INODE: %p, %d\n", inode_temp, inode_temp->bytes_used);
-        inode_temp = inode_temp->next;
+    int bytescounter = bytes;
+    int bytescopied = 0;
+    //Check that disk block has enough space 
+    
+    if(sizeof_disknode - current_inode->bytes_used < bytescounter){
+        //Repeat until enough size is created
+        while(sizeof_disknode - current_inode->bytes_used < bytescounter){
+            printf("NOT ENOUGH SPACE added more\n");
+            // Not enough space in disk, so do memcpy for the remaning space then add new inode and disk
+            int bytestocpy = sizeof_disknode - current_inode->bytes_used;
+            bytescounter -= bytestocpy;
+            bytescopied += bytestocpy;
+            memcpy(current_inode->diskpointed, buffer, bytestocpy);
+            current_inode->bytes_used += bytestocpy;
+            current_inode->next = ptr->inode_location;
+            current_inode = current_inode->next;
+            current_inode->bytes_used = 0;
+            current_inode->diskpointed = ptr->disk_block_location;
+            current_inode->next = NULL;
+            ptr->inode_location = (inode*)((char*)ptr->inode_location + sizeof(inode));
+
+            ptr->disk_block_location = ptr->disk_block_location + sizeof_disknode;
+            ptr->sizeofsystem_remaining -= sizeof_disknode;
+        }
+        //Now can memcpy
+        current_inode->bytes_used += bytescounter;
+        memcpy(current_inode->diskpointed, &buffer[bytescopied], bytescounter);
+        
+    }else{
+        printf("MEMCOPIED directly\n");
+        memcpy(&current_inode->diskpointed[current_inode->bytes_used], buffer, bytes);
+        current_inode->bytes_used += bytes;
     }
 
     return 0;
@@ -347,6 +395,8 @@ int wo_close(int fd){
     }
     if(check_if_open == 1){
         current_file->open = 0;
+        current_file->read = 0;
+        current_file->write = 0;
     }else{
         printf("File is not open can't close\n");
         errnum = errno;
@@ -363,6 +413,12 @@ void printfiles(){
 
     while(current_file!=NULL){
         printf("FD: %d, name: %s, add: %p, size %lu\n", current_file->fd, current_file->name, current_file, sizeof(wo_file));
+
+        inode* temp = current_file->start;
+        while(temp!=NULL){
+            printf("\t bytes: %d, disk: %p\n", temp->bytes_used, temp->diskpointed);
+            temp = temp->next;
+        }
         current_file = current_file->next_file;
     }
 }
@@ -376,6 +432,12 @@ int main(int argc, char* argv[]){
     wo_create("hi1", "WO_RDWR");
     wo_create("wow", "WO_RDWR");
     wo_create("amazing", "WO_RDWR");
+    
+    char str[500] = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    wo_write(0, str, 500);
+    char str2[3000] = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    wo_write(1, str2, 3200);
+    //2949000
     printfiles();
     wo_unmount(mem);
 
