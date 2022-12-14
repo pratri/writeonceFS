@@ -46,7 +46,7 @@ typedef struct superblock{
 
 typedef struct wo_file{
     // name of file
-    char* name;
+    char name[100];
     //FIle descriptor
     int fd;
     // Where the starting inode is
@@ -106,9 +106,9 @@ int wo_mount(char* filename, void* memoryaddress){
             blank = 1;
         }
     }
-
+    fclose(fp);
     //If blank then setup inodes and such
-    if (!blank){
+    if (blank){
         //Sets up superblock at start of memory, it contains a list of free and occupied inodes as well as number and size of file system
         superblock* ptr = (superblock*)mem;
         // ptr->free_start = NULL;
@@ -126,7 +126,112 @@ int wo_mount(char* filename, void* memoryaddress){
         
         // printf("Checking if new are correct? %p, %p\n", ptr->inode_location, ptr->disk_block_location);
         
-    } 
+    } else{
+        FILE* file = fopen("test.txt", "r");
+        superblock* ptr = (superblock*)mem;
+        int d;
+        int e;
+        char str[1005];
+        fgets(str, sizeof(str), file);
+        fgets(str, sizeof(str), file);
+        ptr->sizeofsystem_remaining = atoi(str);
+        fgets(str, sizeof(str), file);
+        ptr->file_descriptor_counter = atoi(str);
+        ptr->all_files_head = NULL;
+        ptr->disk_block_location = (char*)(mem + sizeof_inode_partition + sizeof_filepartition);
+        ptr->inode_location = (inode*)(mem+sizeof(superblock));
+        ptr->wo_file_location = (wo_file*)(mem + sizeof_inode_partition);
+
+        while(fgets(str, sizeof(str), file) != NULL){
+            str[strcspn(str, "\n")] = 0;
+            if(strcmp(str, "NEWFILE_HERE!") == 0){
+                wo_file* creatingfile;
+                if(ptr->all_files_head == NULL){
+                    //Checks if it is the first file
+                    ptr->all_files_head = ptr->wo_file_location;
+                    creatingfile = ptr->wo_file_location;
+                    creatingfile->next_file = NULL;
+                    creatingfile->start = NULL;
+                    ptr->wo_file_location = (wo_file*)((char*)ptr->wo_file_location + sizeof(wo_file));
+                    
+                }else{
+                    //Add file to end of file list if not first file
+                    
+                    creatingfile = ptr->all_files_head;
+                    while(creatingfile->next_file != NULL){
+                        creatingfile = creatingfile->next_file;
+                    }
+                    creatingfile->next_file = ptr->wo_file_location;
+                    creatingfile = creatingfile->next_file;
+                    creatingfile->next_file = NULL;
+                    creatingfile->start = NULL;
+                    ptr->wo_file_location = (wo_file*)((char*)ptr->wo_file_location + sizeof(wo_file));
+                }
+                // Asisgns all the file information to the file 
+                fgets(str, sizeof(str), file);
+                str[strcspn(str, "\n")] = 0; 
+                strcpy(creatingfile->name, str);
+                fgets(str, sizeof(str), file);
+                str[strcspn(str, "\n")] = 0; 
+                creatingfile->fd = atoi(str);
+                fgets(str, sizeof(str), file);
+                str[strcspn(str, "\n")] = 0;  
+                creatingfile->read = atoi(str);
+                fgets(str, sizeof(str), file);
+                str[strcspn(str, "\n")] = 0;  
+                creatingfile->write = atoi(str);
+                fgets(str, sizeof(str), file);
+                str[strcspn(str, "\n")] = 0;  
+                creatingfile->open = atoi(str);
+                //Now should be inodes and specifically how many bytes used in inode
+                // printf("Read: %s, %d, %d, %d, %d\n", creatingfile->name, creatingfile->fd, creatingfile->read, creatingfile->write, creatingfile->open);
+
+            }else{
+                 // Should be size of disk inode ponting to
+                str[strcspn(str, "\n")] = 0;  
+                int sizeofdisk = atoi(str);
+                // Go to last file: 
+                wo_file* currentfile; 
+                currentfile =  ptr->all_files_head;
+                while(currentfile->next_file != NULL){
+                        currentfile = currentfile->next_file;
+                }
+                // Check if start is NULL, if it is initialize else go to last one and initialize it there
+                inode* currentinode;
+
+                if(currentfile->start == NULL){
+                    currentinode = ptr->inode_location;
+                    ptr->inode_location = (inode*)((char*)ptr->inode_location + sizeof(inode));
+                    currentfile->start = currentinode;
+                    currentinode->next = NULL;
+                    
+                    
+                }else{
+                    currentinode = currentfile->start;
+                    while(currentinode->next != NULL){
+                        currentinode = currentinode->next;
+                    }
+                    currentinode->next = ptr->inode_location;
+                    ptr->inode_location = (inode*)((char*)ptr->inode_location + sizeof(inode));
+                    currentinode = currentinode->next;
+                    currentinode->next = NULL;
+                }
+                // Should have the right current inode
+                currentinode->bytes_used = sizeofdisk;
+                // Set up disk block location
+                currentinode->diskpointed = ptr->disk_block_location;
+                ptr->disk_block_location = ptr->disk_block_location + sizeof_disknode;
+                // Write the number of bytes to the disk block location
+                // fread(currentinode->diskpointed, sizeof(char), currentinode->bytes_used, file);
+                fgets(str, sizeof(str), file);
+                str[strcspn(str, "\n")] = 0;  
+                memcpy(currentinode->diskpointed, str, sizeof_disknode); 
+            }
+            // printf("\n");
+        }
+        fclose(file);
+    
+    }
 
     // mount is responsible for checking 'disk' to make sure it is properly formatted. If mount finds 'disk' is blank it should build any 
             // intital structures necessary for accessing 'disk' . If disk format is broken, report error and free structures built 
@@ -154,68 +259,48 @@ int wo_unmount(void* memoryaddress){
     superblock* ptr = (superblock*)memoryaddress;
 
     fwrite("Start of superblock\n",sizeof(char), 20, file);
-    fprintf(file, "%d", ptr->sizeofsystem_remaining);
+    //Write out superblock info 
+    fprintf(file, "%d\n", ptr->sizeofsystem_remaining);
+    fprintf(file, "%d\n", ptr->file_descriptor_counter);
+    wo_file* current_file = ptr->all_files_head;
+    while(current_file!=NULL){
+        fprintf(file, "NEWFILE_HERE!\n");
+        fprintf(file, "%s\n", current_file->name);
+        fprintf(file, "%d\n", current_file->fd);
+        fprintf(file, "%d\n", current_file->read);
+        fprintf(file, "%d\n", current_file->write);
+        fprintf(file, "%d\n", current_file->open);
+        inode* current_inode = current_file->start;
+        while(current_inode!=NULL){
+            fprintf(file, "%d\n", current_inode->bytes_used);
+            fwrite(current_inode->diskpointed, sizeof(char), current_inode->bytes_used, file);
+            fprintf(file, "\n");
+            current_inode = current_inode->next;
+        }
+
+        current_file = current_file->next_file;
+    }
 
     //Should go through every file, in which should print out inode info, break line, then disk block size, break line, disk, continue till new file
 
     return 0;
-    
-    int wo_unmount (void *memoryAddress){
-        // write entire diskfile
-        fseek(f,0,SEEK_SET);
-        if((fwrite(memoryAddress, FILESYSTEM_SIZE,1,f)) !=1){
-            perror("Unmount File Error\n");
-            return errno;
-        }
-        fclose(f);
-        return 0;
-    }
-           
 }
 
-// int wo_open( char* <filename>, <flags>, <mode> )???, when opening user specifies flag in which file is opened, file permission should be granted?
-int wo_open(char* filename, char* flags){  
-    // On open, if not in file creation mode, attempt to find file
+void printfiles(){
+    printf("PRINTING FILES\n");
     superblock* ptr = (superblock*)mem;
-    wo_file* current_file;
-    wo_file* temp = ptr->all_files_head;
-    int fileExists = 0;
-    while(temp->next_file!=NULL){
-        if((temp->name) == filename){
-            current_file = temp;
-            fileExists = 1;
+    wo_file* current_file = ptr->all_files_head;
+
+    while(current_file!=NULL){
+        printf("FD: %d, name: %s, address: %p, size %lu, open: %d\n", current_file->fd, current_file->name, current_file, sizeof(wo_file), current_file->open);
+
+        inode* temp = current_file->start;
+        while(temp!=NULL){
+            printf("\t bytes: %d, disk: %p,\n", temp->bytes_used, temp->diskpointed);
+            temp = temp->next;
         }
-        temp = temp->next_file;
+        current_file = current_file->next_file;
     }
-    // If it does not exist, return the appropriate error code and set errno
-    int errnum;
-    if(fileExists == 0){
-        printf("file does not exist\n");
-        errnum = errno;
-        fprintf(stderr, "Value of errno: %d\n", errno);
-        fprintf(stderr, "File doesn't exist: %s\n", strerror(errnum));
-        return -1;
-    }
-    //Since file exists put it in open_files list
-    current_file->open = 1;
-
-    current_file->next_file = NULL;
-    if(strcmp(flags, "WO_RDONLY") == 0){
-        current_file->read = 1;
-    }else if(strcmp(flags, "WO_WRONLY") == 0){
-        current_file->write = 1;
-    }else if(strcmp(flags, "WO_RDWR") == 0){
-        current_file->read = 1;
-        current_file->write = 1;
-    }else{
-        printf("Flag is in incorrect format\n");
-        errnum = errno;
-        fprintf(stderr, "Value of errno: %d\n", errno);
-        fprintf(stderr, "Flag is in incorrect format: %s\n", strerror(errnum));
-        return -1;
-    }
-
-    return 0;
 }
 
 int wo_create(char* filename, char* flags){
@@ -228,7 +313,7 @@ int wo_create(char* filename, char* flags){
     int doesExist = 0;
     // CHECK IF allfiles head is null
     if(ptr->all_files_head == NULL){
-        printf("FirstFile!\n");
+        // printf("FirstFile!\n");
     }else{
         wo_file* temp = ptr->all_files_head;
         while(temp->next_file!=NULL){
@@ -241,7 +326,7 @@ int wo_create(char* filename, char* flags){
     
    
     if(doesExist){
-        printf("Can't create file it already exists\n");
+        printf("Can't create file %s already exists\n", filename);
         errnum = errno;
         fprintf(stderr, "Value of errno: %d\n", errno);
         fprintf(stderr, "Can't create file it already exists %s\n", strerror(errnum));
@@ -249,7 +334,8 @@ int wo_create(char* filename, char* flags){
     }
 
     wo_file* creatingFile = ptr->wo_file_location;
-    creatingFile->name = filename;
+    strcpy(creatingFile->name, filename);
+    printf("Did strcpy work? %s : %s\n", creatingFile->name, filename);
     creatingFile->next_file = NULL;
     ptr->wo_file_location = (wo_file*)((char*)ptr->wo_file_location + sizeof(wo_file));
     creatingFile->open = 1;
@@ -284,9 +370,83 @@ int wo_create(char* filename, char* flags){
         }
         temp->next_file = creatingFile;
     }
-
     return creatingFile->fd;
 }
+
+// Parameters should end in done to signal end of arguments
+int wo_open(char* filename, ...){  
+    va_list args;
+    va_start(args, filename);
+    char* mode;
+    char* test = filename;
+    char* flags;
+    int counter = 1;
+    while(strcmp(test, "done") != 0 || counter > 4){
+        counter++;
+        
+        test = va_arg(args, char*);
+        if(counter == 2){
+            flags = test;
+        }else if(counter == 3){
+            mode = test;
+        }
+    }
+    va_end(args);
+    int errnum;
+    if(counter > 4){
+        printf("Make sure to end parameters with done or too many parameters\n");
+        errnum = errno;
+        fprintf(stderr, "Value of errno: %d\n", errno);
+        fprintf(stderr, "Make sure to end parameters with done or too many parameters %s\n", strerror(errnum));
+        return -1;
+    }
+    if(counter == 4){
+        wo_create(filename, flags);
+        return 0;
+    }
+
+    // On open, if not in file creation mode, attempt to find file
+    superblock* ptr = (superblock*)mem;
+    wo_file* current_file;
+    wo_file* temp = ptr->all_files_head;
+    int fileExists = 0;
+    while(temp->next_file!=NULL){
+        if((temp->name) == filename){
+            current_file = temp;
+            fileExists = 1;
+        }
+        temp = temp->next_file;
+    }
+    // If it does not exist, return the appropriate error code and set errno
+    if(fileExists == 0){
+        printf("file does not exist\n");
+        errnum = errno;
+        fprintf(stderr, "Value of errno: %d\n", errno);
+        fprintf(stderr, "File doesn't exist: %s\n", strerror(errnum));
+        return -1;
+    }
+    //Since file exists put it in open_files list
+    current_file->open = 1;
+
+    if(strcmp(flags, "WO_RDONLY") == 0){
+        current_file->read = 1;
+    }else if(strcmp(flags, "WO_WRONLY") == 0){
+        current_file->write = 1;
+    }else if(strcmp(flags, "WO_RDWR") == 0){
+        current_file->read = 1;
+        current_file->write = 1;
+    }else{
+        printf("Flag is in incorrect format\n");
+        errnum = errno;
+        fprintf(stderr, "Value of errno: %d\n", errno);
+        fprintf(stderr, "Flag is in incorrect format: %s\n", strerror(errnum));
+        return -1;
+    }
+
+    return 0;
+}
+
+
 
 int wo_read(int fd, void* buffer, int bytes){
     superblock* ptr = (superblock*)mem;
@@ -296,17 +456,18 @@ int wo_read(int fd, void* buffer, int bytes){
     wo_file* current_file;
     wo_file* file_temp = ptr->all_files_head;
     while(file_temp->next_file!=NULL){
-        if(file_temp->fd == fd && file_temp->open == 1 && file_temp->write == 1){    
+        
+        if(file_temp->fd == fd && file_temp->open == 1 && file_temp->read == 1){    
             check_if_exists = 1;
             current_file = file_temp;
         }
         file_temp = file_temp->next_file;
     }
     if(!check_if_exists){
-        printf("File descriptor does not exist or not in write mode\n");
+        printf("File descriptor does not exist or not in read mode: \n");
         errnum = errno;
         fprintf(stderr, "Value of errno: %d\n", errno);
-        fprintf(stderr, "File descriptor does not exist or not in write mode%s\n", strerror(errnum));
+        fprintf(stderr, "File descriptor does not exist or not in read mode%s\n", strerror(errnum));
         return -1;
     }
     if(current_file->start == NULL){
@@ -442,38 +603,29 @@ int wo_close(int fd){
     return 0;
 }
 
-void printfiles(){
-    superblock* ptr = (superblock*)mem;
-    wo_file* current_file = ptr->all_files_head;
 
-    while(current_file!=NULL){
-        printf("FD: %d, name: %s, add: %p, size %lu\n", current_file->fd, current_file->name, current_file, sizeof(wo_file));
-
-        inode* temp = current_file->start;
-        while(temp!=NULL){
-            printf("\t bytes: %d, disk: %p\n", temp->bytes_used, temp->diskpointed);
-            temp = temp->next;
-        }
-        current_file = current_file->next_file;
-    }
-}
 
 int main(int argc, char* argv[]){
     // Malloc 4 MB and create file pass that in to mount
     char* memoryaddress = malloc(4000000);
     wo_mount("test.txt", memoryaddress);
 
-    wo_create("hi1", "WO_RDWR");
-    wo_create("wow", "WO_RDWR");
-    wo_create("amazing", "WO_RDWR");
+    // wo_open("hi1", "WO_RDWR", "WO_CREAT", "done");
+    // wo_open("wow", "WO_RDWR", "WO_CREAT", "done");
+    // wo_open("amazing", "WO_RDWR", "WO_CREAT", "done");
+
+    // wo_close(0);
+
+    // wo_open("hi1", "WO_RDWR", "done");
     
-    char str[500] = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-    wo_write(0, str, 500);
-    char str2[3000] = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-    wo_write(1, str2, 3200);
+    // char str[500] = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    // wo_write(0, str, 500);
+    // char str2[3000] = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    // wo_write(1, str2, 3200);
+    // wo_close(0);
     char* output = malloc(500);
     wo_read(0, output, 500);
-    //2949000
+
     printfiles();
     printf("output: %s\n", output);
     wo_unmount(mem);
