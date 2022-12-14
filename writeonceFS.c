@@ -151,8 +151,11 @@ int wo_unmount(void* memoryaddress){
     }
     // Also writes out files to file? how does multiple files write into one???? maybe write them all in one at a time with gap in between somehow??
     superblock* ptr = (superblock*)memoryaddress;
+
     fwrite("Start of superblock\n",sizeof(char), 20, file);
     fprintf(file, "%d", ptr->sizeofsystem_remaining);
+
+    //Should go through every file, in which should print out inode info, break line, then disk block size, break line, disk, continue till new file
 
     return 0;
 }
@@ -286,9 +289,31 @@ int wo_read(int fd, void* buffer, int bytes){
         }
         file_temp = file_temp->next_file;
     }
+    if(!check_if_exists){
+        printf("File descriptor does not exist or not in write mode\n");
+        errnum = errno;
+        fprintf(stderr, "Value of errno: %d\n", errno);
+        fprintf(stderr, "File descriptor does not exist or not in write mode%s\n", strerror(errnum));
+        return -1;
+    }
+    if(current_file->start == NULL){
+        //Nothing in file
+        printf("NOTHING IN FILE TO READ\n");
+        return -1;
+    }
+    int bytestocpy = bytes;
+    int bytescopied = 0;
+    inode* current_inode = current_file->start;
 
-    // On invocation check if given filedescriptor is valid (has entry in current table of open file descriptors), if not return with error and set errno
-    //      If valid mark it as closed (remove from current table of open file descriptors)
+    while(bytestocpy > sizeof_disknode){
+        memcpy(((char*)buffer) + bytescopied, current_inode->diskpointed, sizeof_disknode);
+        bytescopied += sizeof_disknode;
+        bytestocpy -= sizeof_disknode;
+        current_inode = current_inode->next;
+    }  
+    //Now read fromn next disknode with remaning bytes
+    memcpy(((char*)buffer) + bytescopied, current_inode->diskpointed, bytestocpy);
+
     return 0;
 }
 
@@ -321,7 +346,6 @@ int wo_write(int fd, void* buffer, int bytes){
     }
     inode* current_inode;
     if(current_file->start == NULL){
-        printf("CREATED INODE: \n");
         // No inodes, first time writing, so create inode and disk it points to
         current_inode = ptr->inode_location;
         current_file->start = current_inode;
@@ -348,7 +372,6 @@ int wo_write(int fd, void* buffer, int bytes){
     if(sizeof_disknode - current_inode->bytes_used < bytescounter){
         //Repeat until enough size is created
         while(sizeof_disknode - current_inode->bytes_used < bytescounter){
-            printf("NOT ENOUGH SPACE added more\n");
             // Not enough space in disk, so do memcpy for the remaning space then add new inode and disk
             int bytestocpy = sizeof_disknode - current_inode->bytes_used;
             bytescounter -= bytestocpy;
@@ -367,10 +390,9 @@ int wo_write(int fd, void* buffer, int bytes){
         }
         //Now can memcpy
         current_inode->bytes_used += bytescounter;
-        memcpy(current_inode->diskpointed, &buffer[bytescopied], bytescounter);
+        memcpy(current_inode->diskpointed, ((char*)buffer) + bytescopied, bytescounter);
         
     }else{
-        printf("MEMCOPIED directly\n");
         memcpy(&current_inode->diskpointed[current_inode->bytes_used], buffer, bytes);
         current_inode->bytes_used += bytes;
     }
@@ -426,7 +448,6 @@ void printfiles(){
 int main(int argc, char* argv[]){
     // Malloc 4 MB and create file pass that in to mount
     char* memoryaddress = malloc(4000000);
-    printf("LOL ARLEAY?\n");
     wo_mount("test.txt", memoryaddress);
 
     wo_create("hi1", "WO_RDWR");
@@ -437,8 +458,11 @@ int main(int argc, char* argv[]){
     wo_write(0, str, 500);
     char str2[3000] = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
     wo_write(1, str2, 3200);
+    char* output = malloc(500);
+    wo_read(0, output, 500);
     //2949000
     printfiles();
+    printf("output: %s\n", output);
     wo_unmount(mem);
 
     free(memoryaddress);
