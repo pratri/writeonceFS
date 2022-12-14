@@ -159,6 +159,18 @@ int wo_unmount(void* memoryaddress){
     //Should go through every file, in which should print out inode info, break line, then disk block size, break line, disk, continue till new file
 
     return 0;
+    
+    int wo_unmount (void *memoryAddress){
+        // write entire diskfile
+        fseek(f,0,SEEK_SET);
+        if((fwrite(memoryAddress, FILESYSTEM_SIZE,1,f)) !=1){
+            perror("Unmount File Error\n");
+            return errno;
+        }
+        fclose(f);
+        return 0;
+    }
+           
 }
 
 // int wo_open( char* <filename>, <flags>, <mode> )???, when opening user specifies flag in which file is opened, file permission should be granted?
